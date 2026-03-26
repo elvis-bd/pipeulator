@@ -478,50 +478,64 @@ def page_system_design():
         st.markdown("---")
         st.markdown("**Other fixtures / devices**")
 
-        if "other_fixtures" not in st.session_state:
-            st.session_state["other_fixtures"] = []
+        if "other_count" not in st.session_state:
+            st.session_state["other_count"] = 0
 
-        # Render existing custom fixtures with remove buttons
+        # Render input rows for each custom fixture
+        other_rows = []
         items_to_remove = []
-        for i, item in enumerate(st.session_state["other_fixtures"]):
-            oc1, oc2, oc3 = st.columns([3, 1, 1])
+        for i in range(st.session_state["other_count"]):
+            oc1, oc2, oc3, oc4 = st.columns([3, 1, 2, 1])
             with oc1:
-                st.text(f"{item['desc']} — {item['gpm']:.1f} GPM ({item['water']})")
+                desc = st.text_input("Description", value="", key=f"other_desc_{i}",
+                                     placeholder="e.g., Cooling tower makeup",
+                                     label_visibility="collapsed" if i > 0 else "visible")
+            with oc2:
+                gpm = st.number_input("GPM", min_value=0.0, max_value=5000.0,
+                                      value=0.0, step=1.0, key=f"other_gpm_{i}",
+                                      label_visibility="collapsed" if i > 0 else "visible")
             with oc3:
-                if st.button("Remove", key=f"remove_other_{i}"):
+                water = st.radio("Type", ["Cold", "Hot", "Both"],
+                                 horizontal=True, key=f"other_water_{i}",
+                                 label_visibility="collapsed" if i > 0 else "visible")
+            with oc4:
+                if i > 0:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("X", key=f"remove_other_{i}"):
                     items_to_remove.append(i)
-        for i in sorted(items_to_remove, reverse=True):
-            st.session_state["other_fixtures"].pop(i)
+
+            if desc and gpm > 0:
+                other_rows.append({
+                    "Fixture": desc,
+                    "Qty": 1,
+                    "GPM": f"{gpm:.1f}",
+                    "Water": water,
+                })
+
+        # Handle removals
+        if items_to_remove:
+            # Shift session state keys down to fill gaps
+            old_count = st.session_state["other_count"]
+            keep = [j for j in range(old_count) if j not in items_to_remove]
+            for new_i, old_i in enumerate(keep):
+                if new_i != old_i:
+                    for suffix in ("desc", "gpm", "water"):
+                        key_old = f"other_{suffix}_{old_i}"
+                        key_new = f"other_{suffix}_{new_i}"
+                        if key_old in st.session_state:
+                            st.session_state[key_new] = st.session_state[key_old]
+            # Clean up trailing keys
+            for j in range(len(keep), old_count):
+                for suffix in ("desc", "gpm", "water"):
+                    st.session_state.pop(f"other_{suffix}_{j}", None)
+            st.session_state["other_count"] = len(keep)
             st.rerun()
 
-        # Input row for new entry
-        nc1, nc2, nc3 = st.columns([3, 1, 1])
-        with nc1:
-            new_desc = st.text_input("Description", value="", key="new_other_desc",
-                                     placeholder="e.g., Cooling tower makeup")
-        with nc2:
-            new_gpm = st.number_input("GPM", min_value=0.0, max_value=5000.0,
-                                      value=0.0, step=1.0, key="new_other_gpm")
-        with nc3:
-            new_water = st.radio("Type", ["Cold", "Hot", "Both"],
-                                 horizontal=True, key="new_other_water")
-
         if st.button("Add fixture"):
-            if new_desc and new_gpm > 0:
-                st.session_state["other_fixtures"].append({
-                    "desc": new_desc, "gpm": new_gpm, "water": new_water,
-                })
-                st.rerun()
-
-        # Build other_rows for display and PDF
-        other_rows = []
-        for item in st.session_state["other_fixtures"]:
-            other_rows.append({
-                "Fixture": item["desc"],
-                "Qty": 1,
-                "GPM": f"{item['gpm']:.1f}",
-                "Water": item["water"],
-            })
+            st.session_state["other_count"] += 1
+            st.rerun()
 
         st.markdown("---")
         if fixture_rows:
@@ -545,18 +559,20 @@ def page_system_design():
         total_gpm = wsfu_to_gpm(total_combined, detected_fixture_type)
 
         # Add other GPM demands directly
-        for item in st.session_state["other_fixtures"]:
-            gpm = item["gpm"]
-            if item["water"] == "Cold":
-                cold_gpm += gpm
-                total_gpm += gpm
-            elif item["water"] == "Hot":
-                hot_gpm += gpm
-                total_gpm += gpm
-            else:  # Both
-                cold_gpm += gpm
-                hot_gpm += gpm
-                total_gpm += gpm
+        for i in range(st.session_state.get("other_count", 0)):
+            o_gpm = st.session_state.get(f"other_gpm_{i}", 0.0)
+            o_water = st.session_state.get(f"other_water_{i}", "Cold")
+            if o_gpm > 0:
+                if o_water == "Cold":
+                    cold_gpm += o_gpm
+                    total_gpm += o_gpm
+                elif o_water == "Hot":
+                    hot_gpm += o_gpm
+                    total_gpm += o_gpm
+                else:  # Both
+                    cold_gpm += o_gpm
+                    hot_gpm += o_gpm
+                    total_gpm += o_gpm
 
         m1, m2, m3 = st.columns(3)
         with m1:
@@ -577,7 +593,6 @@ def page_system_design():
         st.session_state["sys_hot_wsfu"] = total_hot
         st.session_state["sys_total_wsfu"] = total_combined
         st.session_state["sys_fixture_type"] = detected_fixture_type
-        st.session_state["sys_other_rows"] = other_rows
 
     # --- Pressure drop calculation ---
     with col_pressure:
@@ -669,6 +684,7 @@ def page_system_design():
         "effective_length": effective_length, "dp_calc": dp_calc,
     }
     st.session_state["sys_fixture_rows"] = fixture_rows
+    st.session_state["sys_other_rows"] = other_rows
     st.session_state["sys_totals"] = totals
     st.session_state["sys_pressure_data"] = pressure_data
 
