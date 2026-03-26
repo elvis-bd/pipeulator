@@ -1,6 +1,8 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+from datetime import date
+from fpdf import FPDF
 
 st.set_page_config(page_title="Pipeulator", layout="wide")
 
@@ -183,6 +185,238 @@ def velocity_at_gpm(gpm: float, d_in: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# PDF Report Generation
+# ---------------------------------------------------------------------------
+
+class PipeulatorPDF(FPDF):
+    def __init__(self, project_name="", engineer=""):
+        super().__init__()
+        self.project_name = project_name
+        self.engineer = engineer
+
+    def header(self):
+        self.set_font("Helvetica", "B", 10)
+        self.cell(0, 5, "Pipeulator - UPC Appendix A Pipe Sizing Report", align="C", new_x="LMARGIN", new_y="NEXT")
+        if self.project_name:
+            self.set_font("Helvetica", "", 8)
+            self.cell(0, 4, f"Project: {self.project_name}", align="C", new_x="LMARGIN", new_y="NEXT")
+        self.line(10, self.get_y() + 1, 200, self.get_y() + 1)
+        self.ln(3)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Helvetica", "I", 7)
+        self.cell(0, 10, f"Generated {date.today().isoformat()}"
+                  f"{'  |  Engineer: ' + self.engineer if self.engineer else ''}"
+                  f"  |  Page {self.page_no()}/{{nb}}",
+                  align="C")
+
+    def section_title(self, title):
+        self.set_font("Helvetica", "B", 11)
+        self.set_fill_color(230, 230, 230)
+        self.cell(0, 7, f"  {title}", fill=True, new_x="LMARGIN", new_y="NEXT")
+        self.ln(2)
+
+    def add_table(self, headers, data, col_widths=None):
+        if col_widths is None:
+            col_widths = [190 / len(headers)] * len(headers)
+        # Header row
+        self.set_font("Helvetica", "B", 7)
+        self.set_fill_color(200, 200, 200)
+        for i, h in enumerate(headers):
+            self.cell(col_widths[i], 5, h, border=1, fill=True, align="C")
+        self.ln()
+        # Data rows
+        self.set_font("Helvetica", "", 7)
+        for row_idx, row in enumerate(data):
+            fill = row_idx % 2 == 1
+            if fill:
+                self.set_fill_color(245, 245, 245)
+            for i, val in enumerate(row):
+                self.cell(col_widths[i], 5, str(val), border=1, fill=fill, align="C")
+            self.ln()
+
+    def add_kv(self, label, value, indent=4):
+        self.set_font("Helvetica", "", 8)
+        self.cell(indent)
+        self.cell(75, 5, label)
+        self.set_font("Helvetica", "B", 8)
+        self.cell(0, 5, str(value), new_x="LMARGIN", new_y="NEXT")
+
+
+def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data):
+    """Generate PDF for System Design page."""
+    pdf = PipeulatorPDF(project_name, engineer)
+    pdf.alias_nb_pages()
+    pdf.add_page()
+
+    # --- Fixture Count ---
+    pdf.section_title("Fixture Count (per UPC Table 6-4)")
+    if fixture_rows:
+        headers = ["Fixture", "Qty", "Cold WSFU", "Hot WSFU", "Total WSFU"]
+        widths = [70, 20, 30, 30, 30]
+        data = [[r["Fixture"], r["Qty"], r["Cold WSFU"], r["Hot WSFU"], r["Total WSFU"]]
+                for r in fixture_rows]
+        pdf.add_table(headers, data, widths)
+    else:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5, "  No fixtures entered.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- Demand Summary ---
+    pdf.section_title("System Demand Summary")
+    pdf.add_kv("Cold WSFU:", f"{totals['cold_wsfu']:.1f}")
+    pdf.add_kv("Cold GPM:", f"{totals['cold_gpm']:.1f}")
+    pdf.add_kv("Hot WSFU:", f"{totals['hot_wsfu']:.1f}")
+    pdf.add_kv("Hot GPM:", f"{totals['hot_gpm']:.1f}")
+    pdf.add_kv("Total WSFU:", f"{totals['total_wsfu']:.1f}")
+    pdf.add_kv("Total GPM:", f"{totals['total_gpm']:.1f}")
+    pdf.add_kv("Fixture Type:", totals['fixture_type'])
+    pdf.ln(3)
+
+    # --- Pressure Budget ---
+    p = pressure_data
+    pdf.section_title("Pressure Budget")
+    pdf.add_kv("Street pressure:", f"{p['street_pressure']:.1f} psi")
+    pdf.add_kv("Meter loss:", f"{p['meter_loss']:.1f} psi")
+    pdf.add_kv("Backflow preventer loss:", f"{p['backflow_loss']:.1f} psi")
+    pdf.add_kv("Height (meter to fixture):", f"{p['height_ft']:.0f} ft")
+    pdf.add_kv("Static head loss:", f"{p['static_loss']:.1f} psi  ({p['height_ft']:.0f} ft x 0.433)")
+    pdf.add_kv("Residual pressure required:", f"{p['residual_pressure']:.1f} psi")
+    pdf.add_kv("Available for friction:", f"{p['available_pressure']:.1f} psi")
+    pdf.ln(2)
+
+    pdf.section_title("Developed Length & Fitting Factor")
+    pdf.add_kv("Developed length:", f"{p['developed_length']:.0f} ft")
+    pdf.add_kv("Fitting correction:", f"{p['fitting_pct']}%  (x{p['fitting_multiplier']:.2f})")
+    pdf.add_kv("Effective length:", f"{p['effective_length']:.0f} ft")
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(0, 7, f"  Uniform Pressure Drop: {p['dp_calc']:.2f} psi/100ft",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+
+    return bytes(pdf.output())
+
+
+def generate_sizing_pdf(project_name, engineer, params, sizing_rows):
+    """Generate PDF for Pipe Sizing page."""
+    pdf = PipeulatorPDF(project_name, engineer)
+    pdf.alias_nb_pages()
+    pdf.add_page()
+
+    # --- Parameters ---
+    pdf.section_title("Sizing Parameters")
+    pdf.add_kv("Pipe material:", params["material"])
+    pdf.add_kv("Hazen-Williams C:", str(params["C"]))
+    pdf.add_kv("Fixture type:", params["fixture_type"])
+    pdf.add_kv("Water type:", params["water_type"])
+    if params["water_type"] == "Hot" and params.get("hot_temp"):
+        pdf.add_kv("Hot water temperature:", f"{params['hot_temp']} F")
+    pdf.add_kv("Velocity limit:", f"{params['v_limit']:.0f} ft/s")
+    pdf.add_kv("Pressure drop:", f"{params['dp_limit']:.2f} psi/100ft")
+    pdf.ln(3)
+
+    # --- Sizing Table ---
+    pdf.section_title("Pipe Sizing Table")
+    if sizing_rows:
+        headers = ["Size", "ID (in)", "GPM (press.)", "GPM (vel.)",
+                   "Allowed GPM", "Vel. (ft/s)", "WSFU", "Limiting"]
+        widths = [18, 18, 24, 24, 24, 22, 22, 30]
+        data = [[r["Nominal Size"], r["ID (in)"], r["Max GPM (pressure)"],
+                 r["Max GPM (velocity)"], r["Allowed GPM"], r["Velocity (ft/s)"],
+                 r["Fixture Units (WSFU)"], r["Limiting Factor"]]
+                for r in sizing_rows]
+        pdf.add_table(headers, data, widths)
+    else:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5, "  No pipe sizes available.", new_x="LMARGIN", new_y="NEXT")
+
+    return bytes(pdf.output())
+
+
+def generate_full_pdf(project_name, engineer, fixture_rows, totals,
+                      pressure_data, params, sizing_rows):
+    """Generate combined PDF with both system design and pipe sizing."""
+    pdf = PipeulatorPDF(project_name, engineer)
+    pdf.alias_nb_pages()
+    pdf.add_page()
+
+    # --- Fixture Count ---
+    pdf.section_title("Fixture Count (per UPC Table 6-4)")
+    if fixture_rows:
+        headers = ["Fixture", "Qty", "Cold WSFU", "Hot WSFU", "Total WSFU"]
+        widths = [70, 20, 30, 30, 30]
+        data = [[r["Fixture"], r["Qty"], r["Cold WSFU"], r["Hot WSFU"], r["Total WSFU"]]
+                for r in fixture_rows]
+        pdf.add_table(headers, data, widths)
+    else:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5, "  No fixtures entered.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- Demand Summary ---
+    pdf.section_title("System Demand Summary")
+    pdf.add_kv("Cold WSFU:", f"{totals['cold_wsfu']:.1f}")
+    pdf.add_kv("Cold GPM:", f"{totals['cold_gpm']:.1f}")
+    pdf.add_kv("Hot WSFU:", f"{totals['hot_wsfu']:.1f}")
+    pdf.add_kv("Hot GPM:", f"{totals['hot_gpm']:.1f}")
+    pdf.add_kv("Total WSFU:", f"{totals['total_wsfu']:.1f}")
+    pdf.add_kv("Total GPM:", f"{totals['total_gpm']:.1f}")
+    pdf.add_kv("Fixture Type:", totals['fixture_type'])
+    pdf.ln(3)
+
+    # --- Pressure Budget ---
+    p = pressure_data
+    pdf.section_title("Pressure Budget")
+    pdf.add_kv("Street pressure:", f"{p['street_pressure']:.1f} psi")
+    pdf.add_kv("Meter loss:", f"{p['meter_loss']:.1f} psi")
+    pdf.add_kv("Backflow preventer loss:", f"{p['backflow_loss']:.1f} psi")
+    pdf.add_kv("Static head loss:", f"{p['static_loss']:.1f} psi  ({p['height_ft']:.0f} ft x 0.433)")
+    pdf.add_kv("Residual pressure required:", f"{p['residual_pressure']:.1f} psi")
+    pdf.add_kv("Available for friction:", f"{p['available_pressure']:.1f} psi")
+    pdf.ln(1)
+    pdf.add_kv("Developed length:", f"{p['developed_length']:.0f} ft")
+    pdf.add_kv("Fitting correction:", f"{p['fitting_pct']}%  (x{p['fitting_multiplier']:.2f})")
+    pdf.add_kv("Effective length:", f"{p['effective_length']:.0f} ft")
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(0, 7, f"  Uniform Pressure Drop: {p['dp_calc']:.2f} psi/100ft",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(3)
+
+    # --- Pipe Sizing ---
+    pdf.add_page()
+    pdf.section_title("Sizing Parameters")
+    pdf.add_kv("Pipe material:", params["material"])
+    pdf.add_kv("Hazen-Williams C:", str(params["C"]))
+    pdf.add_kv("Fixture type:", params["fixture_type"])
+    pdf.add_kv("Water type:", params["water_type"])
+    if params["water_type"] == "Hot" and params.get("hot_temp"):
+        pdf.add_kv("Hot water temperature:", f"{params['hot_temp']} F")
+    pdf.add_kv("Velocity limit:", f"{params['v_limit']:.0f} ft/s")
+    pdf.add_kv("Pressure drop:", f"{params['dp_limit']:.2f} psi/100ft")
+    pdf.ln(3)
+
+    pdf.section_title("Pipe Sizing Table")
+    if sizing_rows:
+        headers = ["Size", "ID (in)", "GPM (press.)", "GPM (vel.)",
+                   "Allowed GPM", "Vel. (ft/s)", "WSFU", "Limiting"]
+        widths = [18, 18, 24, 24, 24, 22, 22, 30]
+        data = [[r["Nominal Size"], r["ID (in)"], r["Max GPM (pressure)"],
+                 r["Max GPM (velocity)"], r["Allowed GPM"], r["Velocity (ft/s)"],
+                 r["Fixture Units (WSFU)"], r["Limiting Factor"]]
+                for r in sizing_rows]
+        pdf.add_table(headers, data, widths)
+
+    return bytes(pdf.output())
+
+
+# ---------------------------------------------------------------------------
 # Page: System Design
 # ---------------------------------------------------------------------------
 
@@ -281,7 +515,7 @@ def page_system_design():
             "Height — meter to highest fixture (ft)",
             min_value=0.0, max_value=500.0, value=10.0, step=1.0,
         )
-        default_residual = 15.0 if has_flush_valve else 8.0
+        default_residual = 25.0
         residual_pressure = st.number_input(
             "Required residual pressure at fixture (psi)",
             min_value=0.0, max_value=50.0, value=default_residual, step=1.0,
@@ -334,6 +568,46 @@ def page_system_design():
 
         # Save to session state
         st.session_state["sys_dp_limit"] = dp_calc
+
+    # --- Save data for PDF export ---
+    totals = {
+        "cold_wsfu": total_cold, "hot_wsfu": total_hot, "total_wsfu": total_combined,
+        "cold_gpm": cold_gpm, "hot_gpm": hot_gpm, "total_gpm": total_gpm,
+        "fixture_type": detected_fixture_type,
+    }
+    pressure_data = {
+        "street_pressure": street_pressure, "meter_loss": meter_loss,
+        "backflow_loss": backflow_loss, "height_ft": height_ft,
+        "static_loss": static_loss, "residual_pressure": residual_pressure,
+        "available_pressure": available_pressure,
+        "developed_length": developed_length, "fitting_pct": fitting_pct,
+        "fitting_multiplier": fitting_multiplier,
+        "effective_length": effective_length, "dp_calc": dp_calc,
+    }
+    st.session_state["sys_fixture_rows"] = fixture_rows
+    st.session_state["sys_totals"] = totals
+    st.session_state["sys_pressure_data"] = pressure_data
+
+    # --- PDF Download ---
+    st.divider()
+    st.subheader("Export to PDF")
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        project_name = st.text_input("Project name", value=st.session_state.get("pdf_project", ""),
+                                     key="sys_project_name")
+        st.session_state["pdf_project"] = project_name
+    with pc2:
+        engineer = st.text_input("Engineer", value=st.session_state.get("pdf_engineer", ""),
+                                 key="sys_engineer")
+        st.session_state["pdf_engineer"] = engineer
+
+    pdf_bytes = generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data)
+    st.download_button(
+        "Download System Design PDF",
+        data=pdf_bytes,
+        file_name="pipeulator_system_design.pdf",
+        mime="application/pdf",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +748,54 @@ def page_pipe_sizing():
         with f3:
             best_fu = _find_min_pipe(lookup_gpm_from_wsfu)
             st.metric("Minimum pipe size", best_fu if best_fu else "Exceeds range")
+
+    # --- PDF Export ---
+    st.divider()
+    st.subheader("Export to PDF")
+
+    params = {
+        "material": material, "C": C, "fixture_type": fixture_type,
+        "water_type": water_type, "hot_temp": hot_temp,
+        "v_limit": v_limit, "dp_limit": dp_limit,
+    }
+
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        project_name = st.text_input("Project name", value=st.session_state.get("pdf_project", ""),
+                                     key="sizing_project_name")
+        st.session_state["pdf_project"] = project_name
+    with pc2:
+        engineer = st.text_input("Engineer", value=st.session_state.get("pdf_engineer", ""),
+                                 key="sizing_engineer")
+        st.session_state["pdf_engineer"] = engineer
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        sizing_pdf = generate_sizing_pdf(project_name, engineer, params, rows)
+        st.download_button(
+            "Download Pipe Sizing PDF",
+            data=sizing_pdf,
+            file_name="pipeulator_pipe_sizing.pdf",
+            mime="application/pdf",
+        )
+    with dl2:
+        # Full report only if system design data exists
+        sys_fixture_rows = st.session_state.get("sys_fixture_rows")
+        sys_totals = st.session_state.get("sys_totals")
+        sys_pressure = st.session_state.get("sys_pressure_data")
+        if sys_totals and sys_pressure:
+            full_pdf = generate_full_pdf(
+                project_name, engineer, sys_fixture_rows, sys_totals,
+                sys_pressure, params, rows,
+            )
+            st.download_button(
+                "Download Full Report PDF",
+                data=full_pdf,
+                file_name="pipeulator_full_report.pdf",
+                mime="application/pdf",
+            )
+        else:
+            st.caption("Complete System Design page first for full report.")
 
     st.divider()
     st.caption(
