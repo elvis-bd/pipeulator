@@ -244,7 +244,7 @@ class PipeulatorPDF(FPDF):
         self.cell(0, 5, str(value), new_x="LMARGIN", new_y="NEXT")
 
 
-def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data):
+def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data, other_rows=None):
     """Generate PDF for System Design page."""
     pdf = PipeulatorPDF(project_name, engineer)
     pdf.alias_nb_pages()
@@ -261,6 +261,14 @@ def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_d
     else:
         pdf.set_font("Helvetica", "I", 8)
         pdf.cell(0, 5, "  No fixtures entered.", new_x="LMARGIN", new_y="NEXT")
+
+    if other_rows:
+        pdf.ln(2)
+        pdf.section_title("Other Fixtures / Devices (direct GPM)")
+        headers = ["Description", "GPM", "Water Type"]
+        widths = [100, 40, 40]
+        data = [[r["Fixture"], r["GPM"], r["Water"]] for r in other_rows]
+        pdf.add_table(headers, data, widths)
     pdf.ln(3)
 
     # --- Demand Summary ---
@@ -338,7 +346,7 @@ def generate_sizing_pdf(project_name, engineer, params, sizing_rows):
 
 
 def generate_full_pdf(project_name, engineer, fixture_rows, totals,
-                      pressure_data, params, sizing_rows):
+                      pressure_data, params, sizing_rows, other_rows=None):
     """Generate combined PDF with both system design and pipe sizing."""
     pdf = PipeulatorPDF(project_name, engineer)
     pdf.alias_nb_pages()
@@ -355,6 +363,14 @@ def generate_full_pdf(project_name, engineer, fixture_rows, totals,
     else:
         pdf.set_font("Helvetica", "I", 8)
         pdf.cell(0, 5, "  No fixtures entered.", new_x="LMARGIN", new_y="NEXT")
+
+    if other_rows:
+        pdf.ln(2)
+        pdf.section_title("Other Fixtures / Devices (direct GPM)")
+        headers = ["Description", "GPM", "Water Type"]
+        widths = [100, 40, 40]
+        data = [[r["Fixture"], r["GPM"], r["Water"]] for r in other_rows]
+        pdf.add_table(headers, data, widths)
     pdf.ln(3)
 
     # --- Demand Summary ---
@@ -456,9 +472,60 @@ def page_system_design():
                     "Total WSFU": f"{f_total:.1f}",
                 })
 
+        # --- Other / custom fixtures ---
+        st.markdown("---")
+        st.markdown("**Other fixtures / devices**")
+
+        if "other_fixtures" not in st.session_state:
+            st.session_state["other_fixtures"] = []
+
+        # Render existing custom fixtures with remove buttons
+        items_to_remove = []
+        for i, item in enumerate(st.session_state["other_fixtures"]):
+            oc1, oc2, oc3 = st.columns([3, 1, 1])
+            with oc1:
+                st.text(f"{item['desc']} — {item['gpm']:.1f} GPM ({item['water']})")
+            with oc3:
+                if st.button("Remove", key=f"remove_other_{i}"):
+                    items_to_remove.append(i)
+        for i in sorted(items_to_remove, reverse=True):
+            st.session_state["other_fixtures"].pop(i)
+            st.rerun()
+
+        # Input row for new entry
+        nc1, nc2, nc3 = st.columns([3, 1, 1])
+        with nc1:
+            new_desc = st.text_input("Description", value="", key="new_other_desc",
+                                     placeholder="e.g., Cooling tower makeup")
+        with nc2:
+            new_gpm = st.number_input("GPM", min_value=0.0, max_value=5000.0,
+                                      value=0.0, step=1.0, key="new_other_gpm")
+        with nc3:
+            new_water = st.radio("Type", ["Cold", "Hot", "Both"],
+                                 horizontal=True, key="new_other_water")
+
+        if st.button("Add fixture"):
+            if new_desc and new_gpm > 0:
+                st.session_state["other_fixtures"].append({
+                    "desc": new_desc, "gpm": new_gpm, "water": new_water,
+                })
+                st.rerun()
+
+        # Build other_rows for display and PDF
+        other_rows = []
+        for item in st.session_state["other_fixtures"]:
+            other_rows.append({
+                "Fixture": item["desc"],
+                "Qty": 1,
+                "GPM": f"{item['gpm']:.1f}",
+                "Water": item["water"],
+            })
+
         st.markdown("---")
         if fixture_rows:
             st.dataframe(pd.DataFrame(fixture_rows), width="stretch", hide_index=True)
+        if other_rows:
+            st.dataframe(pd.DataFrame(other_rows), width="stretch", hide_index=True)
 
         # Determine fixture type from selections
         has_flush_valve = False
@@ -470,10 +537,24 @@ def page_system_design():
                     break
         detected_fixture_type = "Flush valve" if has_flush_valve else "Flush tank"
 
-        # GPM demands
+        # GPM demands from WSFU fixtures
         cold_gpm = wsfu_to_gpm(total_cold, detected_fixture_type)
         hot_gpm = wsfu_to_gpm(total_hot, "Flush tank")  # hot always flush tank
         total_gpm = wsfu_to_gpm(total_combined, detected_fixture_type)
+
+        # Add other GPM demands directly
+        for item in st.session_state["other_fixtures"]:
+            gpm = item["gpm"]
+            if item["water"] == "Cold":
+                cold_gpm += gpm
+                total_gpm += gpm
+            elif item["water"] == "Hot":
+                hot_gpm += gpm
+                total_gpm += gpm
+            else:  # Both
+                cold_gpm += gpm
+                hot_gpm += gpm
+                total_gpm += gpm
 
         m1, m2, m3 = st.columns(3)
         with m1:
@@ -494,6 +575,7 @@ def page_system_design():
         st.session_state["sys_hot_wsfu"] = total_hot
         st.session_state["sys_total_wsfu"] = total_combined
         st.session_state["sys_fixture_type"] = detected_fixture_type
+        st.session_state["sys_other_rows"] = other_rows
 
     # --- Pressure drop calculation ---
     with col_pressure:
@@ -601,7 +683,7 @@ def page_system_design():
                                  key="sys_engineer")
         st.session_state["pdf_engineer"] = engineer
 
-    pdf_bytes = generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data)
+    pdf_bytes = generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data, other_rows)
     st.download_button(
         "Download System Design PDF",
         data=pdf_bytes,
@@ -784,9 +866,10 @@ def page_pipe_sizing():
         sys_totals = st.session_state.get("sys_totals")
         sys_pressure = st.session_state.get("sys_pressure_data")
         if sys_totals and sys_pressure:
+            sys_other_rows = st.session_state.get("sys_other_rows", [])
             full_pdf = generate_full_pdf(
                 project_name, engineer, sys_fixture_rows, sys_totals,
-                sys_pressure, params, rows,
+                sys_pressure, params, rows, sys_other_rows,
             )
             st.download_button(
                 "Download Full Report PDF",
