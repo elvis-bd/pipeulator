@@ -177,7 +177,7 @@ st.set_page_config(page_title="Pipeulator", layout="wide")
 st.title("Pipeulator — UPC Appendix A Pipe Sizing")
 st.caption("Calculates allowable flow per pipe size using UPC uniform pressure-drop methodology (Hazen-Williams)")
 
-col1, col2 = st.columns(2)
+col1, col2 = st.columns([1, 2])
 
 with col1:
     st.subheader("Inputs")
