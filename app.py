@@ -35,6 +35,8 @@ PEX_ID = {
 }
 
 HW_C = {
+    "Copper (smooth)": 140,
+    "Copper (fairly smooth)": 135,
     "Copper (fairly rough)": 130,
     "PEX": 150,
 }
@@ -744,14 +746,14 @@ def page_pipe_sizing():
         max_size = st.selectbox(
             "Maximum pipe size to display",
             ALL_SIZES,
-            index=ALL_SIZES.index('6"') if material == "Copper (fairly rough)" else ALL_SIZES.index('2"'),
+            index=ALL_SIZES.index('6"') if material.startswith("Copper") else ALL_SIZES.index('2"'),
         )
 
         if material == "PEX":
             st.caption("PEX tubing is commonly available up to 2\".")
 
     # Build results
-    if material == "Copper (fairly rough)":
+    if material.startswith("Copper"):
         id_lookup = COPPER_TYPE_L_ID
     else:
         id_lookup = PEX_ID
@@ -883,7 +885,7 @@ def page_pipe_sizing():
     st.divider()
     st.caption(
         "Based on UPC Appendix A sizing methodology. "
-        "Hazen-Williams C values: Copper (fairly rough) = 130, PEX = 150. "
+        "Hazen-Williams C values: Copper smooth=140, fairly smooth=135, fairly rough=130; PEX=150. "
         "Pipe IDs: Copper Type L per ASTM B88, PEX per ASTM F876 SDR-9. "
         "WSFU-to-GPM conversion per UPC Table A 4.1 (flush-tank and flush-valve systems). "
         "Velocity limits per UPC: 8 fps cold, 5 fps hot (<140°F), 3 fps hot (>=140°F)."
