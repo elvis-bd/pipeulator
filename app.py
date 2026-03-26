@@ -429,9 +429,48 @@ def generate_full_pdf(project_name, engineer, fixture_rows, totals,
 # Page: System Design
 # ---------------------------------------------------------------------------
 
+def _init_default(key, value):
+    """Set a session state default only if the key doesn't already exist."""
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
 def page_system_design():
     st.title("System Design — Pressure Drop Calculator")
     st.caption("Calculate uniform pressure drop and fixture unit demand per UPC Appendix A")
+
+    # Initialize defaults for all inputs (only runs once)
+    for name, _, _, _ in FIXTURE_TABLE:
+        _init_default(f"fix_{name}", 0)
+    _init_default("sd_use_booster", False)
+    _init_default("sd_booster_pressure", 80.0)
+    _init_default("sd_street_pressure", 60.0)
+    _init_default("sd_meter_loss", 5.0)
+    _init_default("sd_backflow_loss", 5.0)
+    _init_default("sd_height_ft", 10.0)
+    _init_default("sd_residual_pressure", 25.0)
+    _init_default("sd_developed_length", 100.0)
+    _init_default("sd_fitting_pct", 50)
+    _init_default("other_count", 0)
+
+    if st.button("Clear all inputs", key="sd_clear"):
+        for name, _, _, _ in FIXTURE_TABLE:
+            st.session_state[f"fix_{name}"] = 0
+        st.session_state["sd_use_booster"] = False
+        st.session_state["sd_booster_pressure"] = 80.0
+        st.session_state["sd_street_pressure"] = 60.0
+        st.session_state["sd_meter_loss"] = 5.0
+        st.session_state["sd_backflow_loss"] = 5.0
+        st.session_state["sd_height_ft"] = 10.0
+        st.session_state["sd_residual_pressure"] = 25.0
+        st.session_state["sd_developed_length"] = 100.0
+        st.session_state["sd_fitting_pct"] = 50
+        # Clear custom fixtures
+        for i in range(st.session_state.get("other_count", 0)):
+            for suffix in ("desc", "gpm", "water"):
+                st.session_state.pop(f"other_{suffix}_{i}", None)
+        st.session_state["other_count"] = 0
+        st.rerun()
 
     col_fix, col_pressure = st.columns([1, 1])
 
@@ -447,7 +486,7 @@ def page_system_design():
         fixture_rows = []
         for name, cold_per, hot_per, total_per in FIXTURE_TABLE:
             qty = st.number_input(
-                name, min_value=0, max_value=500, value=0, step=1,
+                name, min_value=0, max_value=500, step=1,
                 key=f"fix_{name}",
             )
             if qty > 0:
@@ -589,12 +628,13 @@ def page_system_design():
     with col_pressure:
         st.subheader("Pressure Budget")
 
-        use_booster = st.toggle("Booster pump", value=False)
+        use_booster = st.toggle("Booster pump", key="sd_use_booster")
 
         if use_booster:
             booster_pressure = st.number_input(
                 "Booster pump discharge pressure (psi)",
-                min_value=1.0, max_value=300.0, value=80.0, step=1.0,
+                min_value=1.0, max_value=300.0, step=1.0,
+                key="sd_booster_pressure",
             )
             starting_pressure = booster_pressure
             street_pressure = 0.0
@@ -604,37 +644,40 @@ def page_system_design():
             booster_pressure = 0.0
             street_pressure = st.number_input(
                 "Street pressure (psi)", min_value=1.0, max_value=200.0,
-                value=60.0, step=1.0,
+                step=1.0, key="sd_street_pressure",
             )
             meter_loss = st.number_input(
                 "Pressure drop through meter (psi)", min_value=0.0,
-                max_value=50.0, value=5.0, step=0.5,
+                max_value=50.0, step=0.5, key="sd_meter_loss",
             )
             backflow_loss = st.number_input(
                 "Pressure drop through backflow preventer (psi)",
-                min_value=0.0, max_value=50.0, value=5.0, step=0.5,
+                min_value=0.0, max_value=50.0, step=0.5, key="sd_backflow_loss",
             )
             starting_pressure = street_pressure
 
         height_ft = st.number_input(
             "Height to highest fixture (ft)",
-            min_value=0.0, max_value=500.0, value=10.0, step=1.0,
+            min_value=0.0, max_value=500.0, step=1.0,
+            key="sd_height_ft",
         )
-        default_residual = 25.0
         residual_pressure = st.number_input(
             "Required residual pressure at fixture (psi)",
-            min_value=0.0, max_value=50.0, value=default_residual, step=1.0,
+            min_value=0.0, max_value=50.0, step=1.0,
+            key="sd_residual_pressure",
         )
 
         st.markdown("---")
         st.subheader("Developed Length")
         developed_length = st.number_input(
             "Developed length of longest run (ft)",
-            min_value=1.0, max_value=5000.0, value=100.0, step=5.0,
+            min_value=1.0, max_value=5000.0, step=5.0,
+            key="sd_developed_length",
         )
         fitting_pct = st.number_input(
             "Fitting correction factor (%)",
-            min_value=0, max_value=200, value=50, step=5,
+            min_value=0, max_value=200, step=5,
+            key="sd_fitting_pct",
             help="Added as a percentage of developed length to account for fittings. "
                  "e.g., 50% means total length = 1.5 x developed length.",
         )
@@ -722,13 +765,31 @@ def page_system_design():
                                  key="sys_engineer")
         st.session_state["pdf_engineer"] = engineer
 
-    pdf_bytes = generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data, other_rows)
-    st.download_button(
-        "Download System Design PDF",
-        data=pdf_bytes,
-        file_name="pipeulator_system_design.pdf",
-        mime="application/pdf",
-    )
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        pdf_bytes = generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_data, other_rows)
+        st.download_button(
+            "Download System Design PDF",
+            data=pdf_bytes,
+            file_name="pipeulator_system_design.pdf",
+            mime="application/pdf",
+        )
+    with dl2:
+        sizing_params = st.session_state.get("sizing_params")
+        sizing_rows = st.session_state.get("sizing_rows")
+        if sizing_params and sizing_rows:
+            full_pdf = generate_full_pdf(
+                project_name, engineer, fixture_rows, totals,
+                pressure_data, sizing_params, sizing_rows, other_rows,
+            )
+            st.download_button(
+                "Download Full Report PDF",
+                data=full_pdf,
+                file_name="pipeulator_full_report.pdf",
+                mime="application/pdf",
+            )
+        else:
+            st.caption("Complete Pipe Sizing page first for full report.")
 
 
 # ---------------------------------------------------------------------------
@@ -739,24 +800,43 @@ def page_pipe_sizing():
     st.title("Pipe Sizing — UPC Appendix A")
     st.caption("Allowable flow per pipe size using Hazen-Williams")
 
+    # Initialize defaults
+    _init_default("ps_material", "Copper (fairly rough)")
+    _init_default("ps_fixture_type", "Flush tank")
+    _init_default("ps_water_type", "Cold")
+    _init_default("ps_hot_temp", 120)
+    sys_dp = st.session_state.get("sys_dp_limit", None)
+    _init_default("ps_dp_limit", round(sys_dp, 1) if sys_dp and sys_dp > 0 else 4.0)
+    _init_default("ps_max_size", '6"')
+
+    # Sync fixture type from system design if available
+    if "sys_fixture_type" in st.session_state and "ps_fixture_type_set" not in st.session_state:
+        st.session_state["ps_fixture_type"] = st.session_state["sys_fixture_type"]
+        st.session_state["ps_fixture_type_set"] = True
+
+    # Update dp_limit from system calc if it changed
+    if sys_dp and sys_dp > 0:
+        st.session_state["ps_dp_limit"] = round(sys_dp, 1)
+
     col1, col2 = st.columns([1, 2])
 
     with col1:
         st.subheader("Inputs")
 
-        material = st.selectbox("Pipe material", list(HW_C.keys()))
+        material = st.selectbox("Pipe material", list(HW_C.keys()), key="ps_material")
 
         fixture_type = st.radio("Fixture type", ["Flush tank", "Flush valve"],
-                                index=0 if st.session_state.get("sys_fixture_type", "Flush tank") == "Flush tank" else 1,
-                                horizontal=True)
+                                horizontal=True, key="ps_fixture_type")
 
-        water_type = st.radio("Water type", ["Cold", "Hot"], horizontal=True)
+        water_type = st.radio("Water type", ["Cold", "Hot"], horizontal=True,
+                              key="ps_water_type")
 
         hot_temp = None
         if water_type == "Hot":
             hot_temp = st.number_input(
                 "Hot water temperature (°F)",
-                min_value=100, max_value=210, value=120, step=5,
+                min_value=100, max_value=210, step=5,
+                key="ps_hot_temp",
             )
 
         if water_type == "Cold":
@@ -769,21 +849,18 @@ def page_pipe_sizing():
         st.info(f"Velocity limit: **{v_limit} ft/s** "
                 f"({'cold water' if water_type == 'Cold' else f'hot water @ {hot_temp}°F'})")
 
-        # Pressure drop — use system value if available, allow override
-        sys_dp = st.session_state.get("sys_dp_limit", None)
         if sys_dp and sys_dp > 0:
             st.caption(f"System-calculated pressure drop: {sys_dp:.2f} psi/100ft")
         dp_limit = st.number_input(
             "Allowable pressure drop (psi per 100 ft)",
-            min_value=0.1, max_value=50.0,
-            value=round(sys_dp, 1) if sys_dp and sys_dp > 0 else 4.0,
-            step=0.5,
+            min_value=0.1, max_value=50.0, step=0.5,
+            key="ps_dp_limit",
         )
 
         max_size = st.selectbox(
             "Maximum pipe size to display",
             ALL_SIZES,
-            index=ALL_SIZES.index('6"') if material.startswith("Copper") else ALL_SIZES.index('2"'),
+            key="ps_max_size",
         )
 
         if material == "PEX":
@@ -824,6 +901,15 @@ def page_pipe_sizing():
             "Fixture Units (WSFU)": f"{wsfu:.0f}",
             "Limiting Factor": limiting,
         })
+
+    # Save sizing data to session state for full report from either page
+    params = {
+        "material": material, "C": C, "fixture_type": fixture_type,
+        "water_type": water_type, "hot_temp": hot_temp,
+        "v_limit": v_limit, "dp_limit": dp_limit,
+    }
+    st.session_state["sizing_params"] = params
+    st.session_state["sizing_rows"] = rows
 
     with col2:
         st.subheader("Results")
@@ -873,12 +959,6 @@ def page_pipe_sizing():
     # --- PDF Export ---
     st.divider()
     st.subheader("Export to PDF")
-
-    params = {
-        "material": material, "C": C, "fixture_type": fixture_type,
-        "water_type": water_type, "hot_temp": hot_temp,
-        "v_limit": v_limit, "dp_limit": dp_limit,
-    }
 
     pc1, pc2 = st.columns(2)
     with pc1:
