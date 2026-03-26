@@ -285,12 +285,22 @@ def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_d
     pdf.ln(3)
 
     # --- Pressure Budget ---
-    p = pressure_data
+    _render_pressure_budget_pdf(pdf, pressure_data)
+
+    return bytes(pdf.output())
+
+
+def _render_pressure_budget_pdf(pdf, p):
+    """Render pressure budget section to PDF, handling booster pump case."""
     pdf.section_title("Pressure Budget")
-    pdf.add_kv("Street pressure:", f"{p['street_pressure']:.1f} psi")
-    pdf.add_kv("Meter loss:", f"{p['meter_loss']:.1f} psi")
-    pdf.add_kv("Backflow preventer loss:", f"{p['backflow_loss']:.1f} psi")
-    pdf.add_kv("Height (meter to fixture):", f"{p['height_ft']:.0f} ft")
+    if p.get("use_booster"):
+        pdf.add_kv("Supply:", "Booster pump")
+        pdf.add_kv("Booster discharge pressure:", f"{p['booster_pressure']:.1f} psi")
+    else:
+        pdf.add_kv("Street pressure:", f"{p['street_pressure']:.1f} psi")
+        pdf.add_kv("Meter loss:", f"{p['meter_loss']:.1f} psi")
+        pdf.add_kv("Backflow preventer loss:", f"{p['backflow_loss']:.1f} psi")
+    pdf.add_kv("Height to highest fixture:", f"{p['height_ft']:.0f} ft")
     pdf.add_kv("Static head loss:", f"{p['static_loss']:.1f} psi  ({p['height_ft']:.0f} ft x 0.433)")
     pdf.add_kv("Residual pressure required:", f"{p['residual_pressure']:.1f} psi")
     pdf.add_kv("Available for friction:", f"{p['available_pressure']:.1f} psi")
@@ -307,8 +317,6 @@ def generate_system_pdf(project_name, engineer, fixture_rows, totals, pressure_d
     pdf.cell(0, 7, f"  Uniform Pressure Drop: {p['dp_calc']:.2f} psi/100ft",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
-
-    return bytes(pdf.output())
 
 
 def generate_sizing_pdf(project_name, engineer, params, sizing_rows):
@@ -387,24 +395,7 @@ def generate_full_pdf(project_name, engineer, fixture_rows, totals,
     pdf.ln(3)
 
     # --- Pressure Budget ---
-    p = pressure_data
-    pdf.section_title("Pressure Budget")
-    pdf.add_kv("Street pressure:", f"{p['street_pressure']:.1f} psi")
-    pdf.add_kv("Meter loss:", f"{p['meter_loss']:.1f} psi")
-    pdf.add_kv("Backflow preventer loss:", f"{p['backflow_loss']:.1f} psi")
-    pdf.add_kv("Static head loss:", f"{p['static_loss']:.1f} psi  ({p['height_ft']:.0f} ft x 0.433)")
-    pdf.add_kv("Residual pressure required:", f"{p['residual_pressure']:.1f} psi")
-    pdf.add_kv("Available for friction:", f"{p['available_pressure']:.1f} psi")
-    pdf.ln(1)
-    pdf.add_kv("Developed length:", f"{p['developed_length']:.0f} ft")
-    pdf.add_kv("Fitting correction:", f"{p['fitting_pct']}%  (x{p['fitting_multiplier']:.2f})")
-    pdf.add_kv("Effective length:", f"{p['effective_length']:.0f} ft")
-    pdf.ln(1)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(0, 100, 0)
-    pdf.cell(0, 7, f"  Uniform Pressure Drop: {p['dp_calc']:.2f} psi/100ft",
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.set_text_color(0, 0, 0)
+    _render_pressure_budget_pdf(pdf, pressure_data)
     pdf.ln(3)
 
     # --- Pipe Sizing ---
@@ -598,20 +589,35 @@ def page_system_design():
     with col_pressure:
         st.subheader("Pressure Budget")
 
-        street_pressure = st.number_input(
-            "Street pressure (psi)", min_value=1.0, max_value=200.0,
-            value=60.0, step=1.0,
-        )
-        meter_loss = st.number_input(
-            "Pressure drop through meter (psi)", min_value=0.0,
-            max_value=50.0, value=5.0, step=0.5,
-        )
-        backflow_loss = st.number_input(
-            "Pressure drop through backflow preventer (psi)",
-            min_value=0.0, max_value=50.0, value=5.0, step=0.5,
-        )
+        use_booster = st.toggle("Booster pump", value=False)
+
+        if use_booster:
+            booster_pressure = st.number_input(
+                "Booster pump discharge pressure (psi)",
+                min_value=1.0, max_value=300.0, value=80.0, step=1.0,
+            )
+            starting_pressure = booster_pressure
+            street_pressure = 0.0
+            meter_loss = 0.0
+            backflow_loss = 0.0
+        else:
+            booster_pressure = 0.0
+            street_pressure = st.number_input(
+                "Street pressure (psi)", min_value=1.0, max_value=200.0,
+                value=60.0, step=1.0,
+            )
+            meter_loss = st.number_input(
+                "Pressure drop through meter (psi)", min_value=0.0,
+                max_value=50.0, value=5.0, step=0.5,
+            )
+            backflow_loss = st.number_input(
+                "Pressure drop through backflow preventer (psi)",
+                min_value=0.0, max_value=50.0, value=5.0, step=0.5,
+            )
+            starting_pressure = street_pressure
+
         height_ft = st.number_input(
-            "Height — meter to highest fixture (ft)",
+            "Height to highest fixture (ft)",
             min_value=0.0, max_value=500.0, value=10.0, step=1.0,
         )
         default_residual = 25.0
@@ -630,32 +636,46 @@ def page_system_design():
             "Fitting correction factor (%)",
             min_value=0, max_value=200, value=50, step=5,
             help="Added as a percentage of developed length to account for fittings. "
-                 "e.g., 50% means total length = 1.5 × developed length.",
+                 "e.g., 50% means total length = 1.5 x developed length.",
         )
         fitting_multiplier = 1.0 + fitting_pct / 100.0
         effective_length = developed_length * fitting_multiplier
 
         st.caption(
-            f"Effective length: {developed_length:.0f} ft × {fitting_multiplier:.2f} "
+            f"Effective length: {developed_length:.0f} ft x {fitting_multiplier:.2f} "
             f"= **{effective_length:.0f} ft**"
         )
 
         # Pressure budget
         static_loss = height_ft * 0.433
-        total_losses = meter_loss + backflow_loss + static_loss + residual_pressure
-        available_pressure = street_pressure - total_losses
+        if use_booster:
+            total_losses = static_loss + residual_pressure
+            available_pressure = booster_pressure - total_losses
+        else:
+            total_losses = meter_loss + backflow_loss + static_loss + residual_pressure
+            available_pressure = street_pressure - total_losses
 
         st.markdown("---")
-        st.text(
-            f"  Street pressure:    {street_pressure:>7.1f} psi\n"
-            f"− Meter loss:         {meter_loss:>7.1f} psi\n"
-            f"− Backflow loss:      {backflow_loss:>7.1f} psi\n"
-            f"− Static head:        {static_loss:>7.1f} psi  ({height_ft:.0f} ft × 0.433)\n"
-            f"− Residual required:  {residual_pressure:>7.1f} psi\n"
-            f"{'─' * 40}\n"
-            f"= Available for friction: {available_pressure:>6.1f} psi\n"
-            f"÷ Effective length:       {effective_length:>6.0f} ft\n"
-        )
+        if use_booster:
+            st.text(
+                f"  Booster pressure:   {booster_pressure:>7.1f} psi\n"
+                f"- Static head:        {static_loss:>7.1f} psi  ({height_ft:.0f} ft x 0.433)\n"
+                f"- Residual required:  {residual_pressure:>7.1f} psi\n"
+                f"{'=' * 40}\n"
+                f"= Available for friction: {available_pressure:>6.1f} psi\n"
+                f"/ Effective length:       {effective_length:>6.0f} ft\n"
+            )
+        else:
+            st.text(
+                f"  Street pressure:    {street_pressure:>7.1f} psi\n"
+                f"- Meter loss:         {meter_loss:>7.1f} psi\n"
+                f"- Backflow loss:      {backflow_loss:>7.1f} psi\n"
+                f"- Static head:        {static_loss:>7.1f} psi  ({height_ft:.0f} ft x 0.433)\n"
+                f"- Residual required:  {residual_pressure:>7.1f} psi\n"
+                f"{'=' * 40}\n"
+                f"= Available for friction: {available_pressure:>6.1f} psi\n"
+                f"/ Effective length:       {effective_length:>6.0f} ft\n"
+            )
 
         if available_pressure <= 0:
             st.error("No pressure available for friction loss. "
@@ -675,6 +695,7 @@ def page_system_design():
         "fixture_type": detected_fixture_type,
     }
     pressure_data = {
+        "use_booster": use_booster, "booster_pressure": booster_pressure,
         "street_pressure": street_pressure, "meter_loss": meter_loss,
         "backflow_loss": backflow_loss, "height_ft": height_ft,
         "static_loss": static_loss, "residual_pressure": residual_pressure,
