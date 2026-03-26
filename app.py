@@ -139,6 +139,22 @@ def gpm_to_wsfu(gpm: float, fixture_type: str = "Flush tank") -> float:
     return float(np.interp(gpm, gpm_arr, wsfu_arr))
 
 
+def wsfu_to_gpm(wsfu: float, fixture_type: str = "Flush tank") -> float:
+    """Convert WSFU to GPM demand using interpolation of UPC table."""
+    if fixture_type == "Flush valve":
+        wsfu_arr, gpm_arr = _WSFU_VALS_VALVE, _GPM_VALS_VALVE
+    else:
+        wsfu_arr, gpm_arr = _WSFU_VALS_TANK, _GPM_VALS_TANK
+
+    if wsfu <= 0:
+        return 0.0
+    if wsfu <= wsfu_arr[0]:
+        return gpm_arr[0] * wsfu / wsfu_arr[0]
+    if wsfu >= wsfu_arr[-1]:
+        return float(gpm_arr[-1])
+    return float(np.interp(wsfu, wsfu_arr, gpm_arr))
+
+
 # ---------------------------------------------------------------------------
 # Hydraulic calculations (Hazen-Williams per UPC Appendix A)
 # ---------------------------------------------------------------------------
@@ -270,26 +286,41 @@ with col2:
 # ---------------------------------------------------------------------------
 
 st.divider()
-st.subheader("Quick Lookup — Check a specific flow")
+st.subheader("Quick Lookup")
 
-qcol1, qcol2, qcol3 = st.columns(3)
-with qcol1:
-    lookup_gpm = st.number_input("Flow rate (GPM)", min_value=0.1, max_value=1000.0, value=10.0, step=1.0)
-with qcol2:
-    wsfu_lookup_type = "Flush tank" if water_type == "Hot" else fixture_type
-    st.metric("Equivalent WSFU", f"{gpm_to_wsfu(lookup_gpm, wsfu_lookup_type):.0f}")
-with qcol3:
-    if rows:
-        # Find smallest adequate pipe
-        best = None
-        for r in rows:
-            if float(r["Allowed GPM"]) >= lookup_gpm:
-                best = r["Nominal Size"]
-                break
-        if best:
-            st.metric("Minimum pipe size", best)
-        else:
-            st.metric("Minimum pipe size", "Exceeds range")
+wsfu_lookup_type = "Flush tank" if water_type == "Hot" else fixture_type
+
+def _find_min_pipe(gpm_needed):
+    """Find smallest pipe that can handle the given GPM."""
+    if not rows:
+        return None
+    for r in rows:
+        if float(r["Allowed GPM"]) >= gpm_needed:
+            return r["Nominal Size"]
+    return None
+
+lookup_tab1, lookup_tab2 = st.tabs(["Lookup by GPM", "Lookup by Fixture Units"])
+
+with lookup_tab1:
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        lookup_gpm = st.number_input("Flow rate (GPM)", min_value=0.1, max_value=1000.0, value=10.0, step=1.0)
+    with g2:
+        st.metric("Equivalent WSFU", f"{gpm_to_wsfu(lookup_gpm, wsfu_lookup_type):.0f}")
+    with g3:
+        best = _find_min_pipe(lookup_gpm)
+        st.metric("Minimum pipe size", best if best else "Exceeds range")
+
+with lookup_tab2:
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        lookup_wsfu = st.number_input("Fixture Units (WSFU)", min_value=1, max_value=10000, value=20, step=1)
+    with f2:
+        lookup_gpm_from_wsfu = wsfu_to_gpm(lookup_wsfu, wsfu_lookup_type)
+        st.metric("Equivalent GPM", f"{lookup_gpm_from_wsfu:.1f}")
+    with f3:
+        best_fu = _find_min_pipe(lookup_gpm_from_wsfu)
+        st.metric("Minimum pipe size", best_fu if best_fu else "Exceeds range")
 
 st.divider()
 st.caption(
